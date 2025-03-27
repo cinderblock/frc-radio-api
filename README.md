@@ -38,7 +38,7 @@ power-cycled.
 The API is optionally protected by token authentication. The installation script prompts for an optional password, and
 if one is provided, the API will require that password to be provided in a `Authorization: Bearer [password]` header.
 
-### /admin Endpoint
+### /health Endpoint
 The `/health` GET endpoint returns a successful response if the API is running. For example:
 ```
 $ curl http://10.0.100.2:8081/health
@@ -152,7 +152,7 @@ on the Vivid-Hosting robot radio.
 ### Authentication
 Same as the access point API.
 
-### /admin Endpoint
+### /health Endpoint
 Same as the access point API.
 
 ### /status Endpoint
