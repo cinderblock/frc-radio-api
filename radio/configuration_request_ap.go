@@ -29,9 +29,9 @@ type ConfigurationRequest struct {
 	// VLANs to use for the teams of the blue alliance. Valid values are "10_20_30", "40_50_60", and "70_80_90".
 	BlueVlans AllianceVlans `json:"blueVlans"`
 
-	// SSID and WPA key for each team station, keyed by alliance and number (e.g. "red1", "blue3). If a station is not
-	// included, its network will be disabled by setting its SSID to a placeholder.
-	StationConfigurations map[string]StationConfiguration `json:"stationConfigurations"`
+	// SSID and WPA key for each team station, keyed by alliance and number (e.g. "red1", "blue3).
+	// A null value indicates the station should be unconfigured.
+	StationConfigurations map[string]*StationConfiguration `json:"stationConfigurations"`
 
 	// IP address of the syslog server to send logs to (via UDP on port 514).
 	SyslogIpAddress string `json:"syslogIpAddress"`
@@ -112,6 +112,12 @@ func (request ConfigurationRequest) Validate(radio *Radio) error {
 		if !stationNameValid {
 			return fmt.Errorf("invalid station: %s", stationName)
 		}
+
+		// If stationConfiguration is nil, it means we're unconfiguring the station
+		if stationConfiguration == nil {
+			continue
+		}
+
 		if stationConfiguration.Ssid == "" {
 			return fmt.Errorf("SSID for station %s cannot be blank", stationName)
 		}

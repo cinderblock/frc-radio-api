@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+const (
+	// Maximum number of times to retry configuring the radio.
+	maxRetryCount = 3
+)
+
 // Radio holds the current state of the access point's configuration and any robot radios connected to it.
 type Radio struct {
 	// 5GHz or 6GHz channel number the radio is broadcasting on.
@@ -202,7 +207,7 @@ func (radio *Radio) configure(request ConfigurationRequest) error {
 
 	if radio.Type == TypeLinksys {
 		// Clear the state of the radio before loading teams; the Linksys AP is crash-prone otherwise.
-		if err := radio.configureStations(map[string]StationConfiguration{}); err != nil {
+		if err := radio.configureStations(map[string]*StationConfiguration{}); err != nil {
 			return err
 		}
 		time.Sleep(wifiReloadBackoffDuration)
@@ -211,33 +216,42 @@ func (radio *Radio) configure(request ConfigurationRequest) error {
 }
 
 // configureStations configures the access point with the given team station configurations.
-func (radio *Radio) configureStations(stationConfigurations map[string]StationConfiguration) error {
+func (radio *Radio) configureStations(stationConfigurations map[string]*StationConfiguration) error {
 	retryCount := 1
 
 	for {
-		for station := red1; station <= blue3; station++ {
-			position := int(station) + 1
-			var ssid, wpaKey string
-			if config, ok := stationConfigurations[station.String()]; ok {
-				ssid = config.Ssid
-				wpaKey = config.WpaKey
-			} else {
-				ssid = fmt.Sprintf("no-team-%d", position)
-				wpaKey = ssid
+		// Only configure stations that are in the request
+		for stationName, config := range stationConfigurations {
+			// Skip stations that are being unconfigured (config is nil)
+			if config == nil {
+				continue
 			}
 
+			// Convert station name to station enum
+			var station station
+			for s := red1; s <= blue3; s++ {
+				if s.String() == stationName {
+					station = s
+					break
+				}
+			}
+
+			position := int(station) + 1
 			wifiInterface := fmt.Sprintf("@wifi-iface[%d]", position)
-			uciTree.SetType("wireless", wifiInterface, "ssid", uci.TypeOption, ssid)
-			uciTree.SetType("wireless", wifiInterface, "key", uci.TypeOption, wpaKey)
+
+			// Set the new configuration
+			uciTree.SetType("wireless", wifiInterface, "ssid", uci.TypeOption, config.Ssid)
+			uciTree.SetType("wireless", wifiInterface, "key", uci.TypeOption, config.WpaKey)
 			if radio.Type == TypeVividHosting {
-				uciTree.SetType("wireless", wifiInterface, "sae_password", uci.TypeOption, wpaKey)
+				uciTree.SetType("wireless", wifiInterface, "sae_password", uci.TypeOption, config.WpaKey)
 			}
 			vlan := fmt.Sprintf("vlan%d", radio.getStationVlan(station))
 			uciTree.SetType("wireless", wifiInterface, "network", uci.TypeOption, vlan)
+		}
 
-			if err := uciTree.Commit(); err != nil {
-				return fmt.Errorf("failed to commit wireless configuration: %v", err)
-			}
+		// Commit all changes at once
+		if err := uciTree.Commit(); err != nil {
+			return fmt.Errorf("failed to commit wireless configuration: %v", err)
 		}
 
 		if _, err := shell.runCommand("wifi", "reload", radio.device); err != nil {
@@ -248,17 +262,18 @@ func (radio *Radio) configureStations(stationConfigurations map[string]StationCo
 		err := radio.updateStationStatuses()
 		if err != nil {
 			return fmt.Errorf("error updating station statuses: %v", err)
-		} else if radio.stationSsidsAreCorrect(stationConfigurations) {
-			log.Printf("Successfully configured Wi-Fi after %d attempts.", retryCount)
-			break
 		}
 
-		log.Printf("Wi-Fi configuration still incorrect after %d attempts; trying again.", retryCount)
-		time.Sleep(retryBackoffDuration)
-		retryCount++
-	}
+		if radio.stationSsidsAreCorrect(stationConfigurations) {
+			return nil
+		}
 
-	return nil
+		if retryCount >= maxRetryCount {
+			return fmt.Errorf("failed to configure stations after %d attempts", retryCount)
+		}
+		retryCount++
+		time.Sleep(wifiReloadBackoffDuration)
+	}
 }
 
 // updateStationStatuses fetches the current Wi-Fi status (SSID, WPA key, etc.) for each team station and updates the
@@ -284,10 +299,10 @@ func (radio *Radio) updateStationStatuses() error {
 
 // stationSsidsAreCorrect returns true if the configured networks as read from the access point match the requested
 // configuration.
-func (radio *Radio) stationSsidsAreCorrect(stationConfigurations map[string]StationConfiguration) bool {
+func (radio *Radio) stationSsidsAreCorrect(stationConfigurations map[string]*StationConfiguration) bool {
 	for stationName, stationStatus := range radio.StationStatuses {
 		if config, ok := stationConfigurations[stationName]; ok {
-			if radio.StationStatuses[stationName] == nil || radio.StationStatuses[stationName].Ssid != config.Ssid {
+			if stationStatus == nil || stationStatus.Ssid != config.Ssid {
 				return false
 			}
 		} else {
